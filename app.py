@@ -14,7 +14,14 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
+
+try:
+    from http.server import ThreadingHTTPServer
+except ImportError:
+    class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+        daemon_threads = True
 from urllib.parse import parse_qs, urlparse
 
 # ---------------------------------------------------------------------------
@@ -76,6 +83,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
                 password_hash TEXT NOT NULL,
                 password_salt TEXT NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('ADMIN', 'OPERATOR')),
@@ -165,8 +173,10 @@ def init_db():
             );
             """
         )
-        # 기존 users 테이블 안전 마이그레이션 (사용자별 암호화 키 래핑 컬럼)
+        # 기존 users 테이블 안전 마이그레이션 (사용자별 암호화 키 래핑 및 실명 컬럼)
         ucols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "name" not in ucols:
+            conn.execute("ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''")
         if "wrapped_vault_key" not in ucols:
             conn.execute("ALTER TABLE users ADD COLUMN wrapped_vault_key TEXT NOT NULL DEFAULT ''")
         if "wrapped_vault_key_iv" not in ucols:
@@ -278,18 +288,36 @@ def get_key_verifier():
 # ---------------------------------------------------------------------------
 # User Role & Timed/Scoped Permission Helpers
 # ---------------------------------------------------------------------------
+def parse_iso_dt(val: str) -> datetime:
+    """Safe ISO 8601 datetime parser compatible with all Python 3 versions (3.6+)."""
+    if not val:
+        raise ValueError("Empty datetime string")
+    clean = val.strip()
+    if clean.endswith("Z"):
+        clean = clean[:-1]
+    if hasattr(datetime, "fromisoformat"):
+        try:
+            return datetime.fromisoformat(clean)
+        except Exception:
+            pass
+    clean_split = clean.split(".")[0]
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(clean_split, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Unable to parse datetime: {val}")
+
+
 def normalize_utc_iso(value: str) -> str:
     """Normalize client ISO-8601 timestamp to UTC naive ISO string matching now_iso()."""
     val = (value or "").strip()
     if not val:
         return ""
     try:
-        if val.endswith("Z"):
-            dt = datetime.fromisoformat(val[:-1])
-        else:
-            dt = datetime.fromisoformat(val)
-            if dt.tzinfo is not None:
-                dt = (dt - dt.utcoffset()).replace(tzinfo=None)
+        dt = parse_iso_dt(val)
+        if dt.tzinfo is not None:
+            dt = (dt - dt.utcoffset()).replace(tzinfo=None)
         return dt.replace(microsecond=0).isoformat()
     except Exception:
         raise ValueError("날짜/시간 형식이 올바르지 않습니다. (ISO-8601 형식 필요)")
@@ -456,7 +484,7 @@ class VaultHandler(BaseHTTPRequestHandler):
             db().commit()
 
             row = db().execute(
-                "SELECT s.id as sid, s.user_id, u.id, u.username, u.role "
+                "SELECT s.id as sid, s.user_id, u.id, u.username, u.name, u.role "
                 "FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.token = ?",
                 (token,),
             ).fetchone()
@@ -466,7 +494,8 @@ class VaultHandler(BaseHTTPRequestHandler):
             db().execute("UPDATE sessions SET last_active = ? WHERE id = ?", (current, row["sid"]))
             db().commit()
 
-        return {"id": row["user_id"], "username": row["username"], "role": row["role"]}
+        user_name = row["name"] if "name" in row.keys() and row["name"] else ""
+        return {"id": row["user_id"], "username": row["username"], "name": user_name, "role": row["role"]}
 
     def require_auth(self):
         user = self.authenticate()
@@ -553,6 +582,10 @@ class VaultHandler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/users/(\d+)/role$", path)
             if m and method == "PUT":
                 return self.handle_user_role_update(int(m.group(1)))
+
+            m = re.match(r"^/api/users/(\d+)/name$", path)
+            if m and method == "PUT":
+                return self.handle_user_name_update(int(m.group(1)))
 
             m = re.match(r"^/api/users/(\d+)/password$", path)
             if m and method == "PUT":
@@ -649,6 +682,7 @@ class VaultHandler(BaseHTTPRequestHandler):
     def handle_auth_init(self):
         body = self.read_json()
         username = body.get("username", "").strip()
+        name = (body.get("name") or "").strip()
         password = body.get("password", "")
         verifier_cipher = body.get("verifier_cipher", "")
         verifier_iv = body.get("verifier_iv", "")
@@ -689,9 +723,9 @@ class VaultHandler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": "System already initialized"}, 400)
 
             cur = db().execute(
-                "INSERT INTO users (username, password_hash, password_salt, role, wrapped_vault_key, wrapped_vault_key_iv, key_salt, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (username, pw_hash, salt, "ADMIN", wrapped_vault_key, wrapped_vault_key_iv, key_salt, ts),
+                "INSERT INTO users (username, name, password_hash, password_salt, role, wrapped_vault_key, wrapped_vault_key_iv, key_salt, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (username, name, pw_hash, salt, "ADMIN", wrapped_vault_key, wrapped_vault_key_iv, key_salt, ts),
             )
             user_id = cur.lastrowid
 
@@ -707,8 +741,8 @@ class VaultHandler(BaseHTTPRequestHandler):
                 )
             db().commit()
 
-        create_audit("LOG_INIT_ADMIN", user_id=user_id, username=username, ip_address=self.client_ip())
-        self.send_json({"ok": True, "user": {"id": user_id, "username": username, "role": "ADMIN"}})
+        create_audit("LOG_INIT_ADMIN", user_id=user_id, username=username, ip_address=self.client_ip(), details=f"name: {name}")
+        self.send_json({"ok": True, "user": {"id": user_id, "username": username, "name": name, "role": "ADMIN"}})
 
     def handle_auth_login(self):
         ip = self.client_ip()
@@ -769,10 +803,11 @@ class VaultHandler(BaseHTTPRequestHandler):
                 "iv": user["wrapped_vault_key_iv"],
                 "salt": user["key_salt"],
             }
+        user_real_name = user["name"] if "name" in user.keys() and user["name"] else ""
         self.send_json({
             "ok": True,
             "token": token,
-            "user": {"id": user["id"], "username": user["username"], "role": user["role"]},
+            "user": {"id": user["id"], "username": user["username"], "name": user_real_name, "role": user["role"]},
             "key_verifier": get_key_verifier(),
             "kdf_params": get_kdf_params(),
             "wrapped_key": wrapped_key,
@@ -804,7 +839,7 @@ class VaultHandler(BaseHTTPRequestHandler):
         if user is None:
             return
         u_row = db().execute(
-            "SELECT wrapped_vault_key, wrapped_vault_key_iv, key_salt, created_at FROM users WHERE id = ?",
+            "SELECT name, wrapped_vault_key, wrapped_vault_key_iv, key_salt, created_at FROM users WHERE id = ?",
             (user["id"],),
         ).fetchone()
         wrapped_key = None
@@ -819,6 +854,7 @@ class VaultHandler(BaseHTTPRequestHandler):
             "user": {
                 "id": user["id"],
                 "username": user["username"],
+                "name": u_row["name"] if u_row and "name" in u_row.keys() and u_row["name"] else "",
                 "role": user["role"],
                 "created_at": u_row["created_at"] if u_row else "",
             },
@@ -916,7 +952,7 @@ class VaultHandler(BaseHTTPRequestHandler):
         if user is None:
             return
         current = now_iso()
-        rows = db().execute("SELECT id, username, role, wrapped_vault_key, created_at FROM users ORDER BY id").fetchall()
+        rows = db().execute("SELECT id, username, name, role, wrapped_vault_key, created_at FROM users ORDER BY id").fetchall()
         perm_rows = db().execute(
             "SELECT user_id, COUNT(*) as cnt FROM user_permissions "
             "WHERE revoked = 0 AND (starts_at = '' OR starts_at <= ?) AND (expires_at = '' OR expires_at > ?) "
@@ -928,6 +964,7 @@ class VaultHandler(BaseHTTPRequestHandler):
             {
                 "id": r["id"],
                 "username": r["username"],
+                "name": r["name"] if "name" in r.keys() and r["name"] else "",
                 "role": r["role"],
                 "created_at": r["created_at"],
                 "active_permission_count": perm_counts.get(r["id"], 0),
@@ -1021,6 +1058,38 @@ class VaultHandler(BaseHTTPRequestHandler):
             details=f"{target['username']}: {target['role']} -> {new_role}",
         )
         self.send_json({"ok": True, "user": {"id": target["id"], "username": target["username"], "role": new_role}})
+
+    def handle_user_name_update(self, uid: int):
+        user = self.require_admin()
+        if user is None:
+            return
+
+        target = db().execute("SELECT id, username, name FROM users WHERE id = ?", (uid,)).fetchone()
+        if target is None:
+            return self.send_json({"ok": False, "error": "사용자를 찾을 수 없습니다."}, 404)
+
+        # 보안/정합성 통제: 한번 입력하면 다신 수정 못하게 영구 고정
+        existing_name = (target["name"] or "").strip()
+        if existing_name:
+            return self.send_json({"ok": False, "error": f"사용자명은 이미 '{existing_name}'(으)로 등록되어 있어 수정할 수 없습니다."}, 400)
+
+        body = self.read_json()
+        new_name = (body.get("name") or "").strip()
+        if not new_name:
+            return self.send_json({"ok": False, "error": "등록할 사용자명(이름)을 입력해주세요."}, 400)
+
+        with _db_lock:
+            db().execute("UPDATE users SET name = ? WHERE id = ?", (new_name, uid))
+            db().commit()
+
+        create_audit(
+            "USER_NAME_SET",
+            user_id=user["id"],
+            username=user["username"],
+            ip_address=self.client_ip(),
+            details=f"Set name for {target['username']}: '{new_name}' (locked)",
+        )
+        self.send_json({"ok": True, "name": new_name})
 
     def _validate_permission_payload(self, body: dict):
         permission_level = (body.get("permission_level") or "").strip().upper()
@@ -1265,6 +1334,7 @@ class VaultHandler(BaseHTTPRequestHandler):
             return
         body = self.read_json()
         username = body.get("username", "").strip()
+        name = (body.get("name") or "").strip()
         password = body.get("password", "")
         role = body.get("role", "OPERATOR")
         wrapped_vault_key = (body.get("wrapped_vault_key") or "").strip()
@@ -1272,13 +1342,13 @@ class VaultHandler(BaseHTTPRequestHandler):
         key_salt = (body.get("key_salt") or "").strip()
 
         if not username or len(password) < 8:
-            return self.send_json({"ok": False, "error": "사용자명과 8자 이상의 비밀번호가 필요합니다."}, 400)
+            return self.send_json({"ok": False, "error": "ID와 8자 이상의 비밀번호가 필요합니다."}, 400)
         if role not in ("ADMIN", "OPERATOR"):
             return self.send_json({"ok": False, "error": "Role must be ADMIN or OPERATOR"}, 400)
 
         existing = db().execute("SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username,)).fetchone()
         if existing:
-            return self.send_json({"ok": False, "error": "Username already exists"}, 400)
+            return self.send_json({"ok": False, "error": "이미 존재하는 ID입니다."}, 400)
 
         salt = secrets.token_bytes(32).hex()
         pw_hash = hash_password(password, salt)
@@ -1286,15 +1356,15 @@ class VaultHandler(BaseHTTPRequestHandler):
 
         with _db_lock:
             cur = db().execute(
-                "INSERT INTO users (username, password_hash, password_salt, role, wrapped_vault_key, wrapped_vault_key_iv, key_salt, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (username, pw_hash, salt, role, wrapped_vault_key, wrapped_vault_key_iv, key_salt, ts),
+                "INSERT INTO users (username, name, password_hash, password_salt, role, wrapped_vault_key, wrapped_vault_key_iv, key_salt, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (username, name, pw_hash, salt, role, wrapped_vault_key, wrapped_vault_key_iv, key_salt, ts),
             )
             db().commit()
             new_id = cur.lastrowid
 
         create_audit("USER_CREATED", user_id=user["id"], username=user["username"],
-                     ip_address=self.client_ip(), details=f"Created user '{username}' with role {role}")
+                     ip_address=self.client_ip(), details=f"Created user ID '{username}', Name '{name}' with role {role}")
         self.send_json({"ok": True, "id": new_id})
 
     def handle_dashboard_analytics(self, qs: dict):
@@ -1355,23 +1425,11 @@ class VaultHandler(BaseHTTPRequestHandler):
             active_sessions = 1
             pending_requests = 0
 
-        # 3. 7-day trend & today/yesterday visitors (in user's local timezone)
+        # 3. 7-day trend (시스템 전체 활동 통계: 로그인, 열람·복사, 실패 건수)
+        # 운영자/관리자 구분 없이 시스템 전체의 활동 추세를 집계하여 그래프가 공백/플랫라인으로 고사되지 않도록 보장
         start_local_dt = datetime.combine(today_local - timedelta(days=6), datetime.min.time())
         start_utc_iso = (start_local_dt - tz_delta).isoformat()
         cutoff_24h_iso = (now_utc - timedelta(hours=24)).isoformat()
-
-        is_admin = user["role"] == "ADMIN"
-        audit_sql = (
-            "SELECT a.action, a.user_id, a.username, a.target_hostname, a.ip_address, a.details, a.created_at, u.role as user_role "
-            "FROM audit_logs a LEFT JOIN users u ON a.user_id = u.id "
-            "WHERE a.created_at >= ?"
-        )
-        audit_params = [start_utc_iso]
-        if not is_admin:
-            audit_sql += " AND a.user_id = ?"
-            audit_params.append(user["id"])
-        audit_sql += " ORDER BY a.created_at ASC"
-        audit_rows = db().execute(audit_sql, audit_params).fetchall()
 
         day_keys = [(today_local - timedelta(days=i)) for i in range(6, -1, -1)]
         trend_map = {
@@ -1380,6 +1438,46 @@ class VaultHandler(BaseHTTPRequestHandler):
         }
         today_str = today_local.isoformat()
         yesterday_str = yesterday_local.isoformat()
+
+        # 장비 열람 관련 행위: 비밀번호 열람, 비밀번호 복사, 이력 열람, 장비 상세 조회
+        view_actions = {"SECRET_VIEWED", "SECRET_COPIED", "HISTORY_VIEWED", "VAULT_VIEWED"}
+
+        # 시스템 전체 트렌드 집계
+        system_trend_rows = db().execute(
+            "SELECT action, created_at FROM audit_logs WHERE created_at >= ? ORDER BY created_at ASC",
+            (start_utc_iso,),
+        ).fetchall()
+        for r in system_trend_rows:
+            try:
+                dt_utc = parse_iso_dt(r["created_at"])
+            except Exception:
+                continue
+            dt_loc = dt_utc + tz_delta
+            day_str = dt_loc.date().isoformat()
+            act = r["action"]
+            if day_str in trend_map:
+                if act in ("LOGIN_SUCCESS", "LOG_INIT_ADMIN"):
+                    trend_map[day_str]["logins"] += 1
+                elif act in view_actions:
+                    trend_map[day_str]["secrets"] += 1
+                elif act == "LOGIN_FAILED":
+                    trend_map[day_str]["failures"] += 1
+
+        # 접속자 현황, 자주 열람된 장비, 24시간 보안 알림 (사용자 권한에 따른 RBAC 격리)
+        is_admin = user["role"] == "ADMIN"
+        audit_sql = (
+            "SELECT a.action, a.user_id, a.username, a.target_hostname, a.ip_address, a.details, a.created_at, "
+            "u.role as user_role, u.name as user_real_name "
+            "FROM audit_logs a LEFT JOIN users u ON (a.user_id = u.id OR (a.username = u.username AND a.username != '')) "
+            "WHERE a.created_at >= ?"
+        )
+        audit_params = [start_utc_iso]
+        if not is_admin:
+            audit_sql += " AND (a.user_id = ? OR a.username = ?)"
+            audit_params.extend([user["id"], user["username"]])
+        audit_sql += " ORDER BY a.created_at ASC"
+        audit_rows = db().execute(audit_sql, audit_params).fetchall()
+
         today_visitors = {}
         yesterday_visitors = {}
         device_counts = {}
@@ -1388,41 +1486,46 @@ class VaultHandler(BaseHTTPRequestHandler):
 
         for r in audit_rows:
             try:
-                dt_utc = datetime.fromisoformat(r["created_at"])
+                dt_utc = parse_iso_dt(r["created_at"])
             except Exception:
                 continue
             dt_loc = dt_utc + tz_delta
             day_str = dt_loc.date().isoformat()
             act = r["action"]
+            uname = (r["username"] or "").strip()
+            r_name = (r["user_real_name"] or "").strip()
 
-            if day_str in trend_map:
-                if act == "LOGIN_SUCCESS":
-                    trend_map[day_str]["logins"] += 1
-                elif act in ("SECRET_VIEWED", "SECRET_COPIED"):
-                    trend_map[day_str]["secrets"] += 1
-                elif act == "LOGIN_FAILED":
-                    trend_map[day_str]["failures"] += 1
-
-            if act == "LOGIN_SUCCESS":
-                uname = r["username"] or "unknown"
+            # 사용자 행위 식별 (로그인 횟수는 실제 인증 성공만 정밀 집계, 행위 수는 전체 활동 집계)
+            if uname:
                 bucket = today_visitors if day_str == today_str else (yesterday_visitors if day_str == yesterday_str else None)
                 if bucket is not None:
+                    is_login_act = act in ("LOGIN_SUCCESS", "LOG_INIT_ADMIN")
                     entry = bucket.get(uname)
                     if entry is None:
                         bucket[uname] = {
                             "username": uname,
+                            "name": r_name,
                             "role": r["user_role"] or "OPERATOR",
-                            "login_count": 1,
+                            "login_count": 1 if is_login_act else 1,
+                            "real_login_count": 1 if is_login_act else 0,
+                            "activity_count": 1,
                             "last_login": r["created_at"],
                             "last_ip": r["ip_address"] or "-",
                         }
                     else:
-                        entry["login_count"] += 1
+                        if is_login_act:
+                            entry["real_login_count"] += 1
+                            entry["login_count"] = max(entry["login_count"], entry["real_login_count"])
+                        entry["activity_count"] += 1
+                        if r_name and not entry["name"]:
+                            entry["name"] = r_name
                         if r["created_at"] >= entry["last_login"]:
                             entry["last_login"] = r["created_at"]
-                            entry["last_ip"] = r["ip_address"] or "-"
+                            if r["ip_address"]:
+                                entry["last_ip"] = r["ip_address"]
 
-            if act in ("SECRET_VIEWED", "SECRET_COPIED") and r["target_hostname"]:
+            # 자주 열람된 장비 TOP 5
+            if act in view_actions and r["target_hostname"]:
                 hn = r["target_hostname"]
                 device_counts[hn] = device_counts.get(hn, 0) + 1
 
@@ -1445,11 +1548,70 @@ class VaultHandler(BaseHTTPRequestHandler):
                             fa["last_attempt"] = r["created_at"]
                             fa["details"] = r["details"] or ""
 
+        # 활성 세션 기반 접속자 보정 (오늘 로그인 세션이 유지된 사용자 반영)
+        try:
+            sess_rows = db().execute(
+                "SELECT s.user_id, s.last_active, u.username, u.name, u.role "
+                "FROM sessions s JOIN users u ON s.user_id = u.id "
+                "WHERE s.last_active >= ?",
+                (start_utc_iso,),
+            ).fetchall()
+            for s in sess_rows:
+                try:
+                    s_utc = parse_iso_dt(s["last_active"])
+                    s_loc = s_utc + tz_delta
+                    s_day = s_loc.date().isoformat()
+                except Exception:
+                    continue
+                if s_day == today_str and (is_admin or s["user_id"] == user["id"]):
+                    s_uname = s["username"]
+                    s_name = s["name"] if "name" in s.keys() else ""
+                    if s_uname not in today_visitors:
+                        today_visitors[s_uname] = {
+                            "username": s_uname,
+                            "name": s_name or "",
+                            "role": s["role"] or "OPERATOR",
+                            "login_count": 1,
+                            "activity_count": 1,
+                            "last_login": s["last_active"],
+                            "last_ip": "-",
+                        }
+                    else:
+                        if s["last_active"] > today_visitors[s_uname]["last_login"]:
+                            today_visitors[s_uname]["last_login"] = s["last_active"]
+                        if s_name and not today_visitors[s_uname]["name"]:
+                            today_visitors[s_uname]["name"] = s_name
+        except Exception:
+            pass
+
+        # 현재 대시보드를 조회 중인 본인 계정(Admin 포함)은 오늘 접속자에 반드시 포함되도록 보장
+        curr_uname = user.get("username")
+        if curr_uname:
+            if curr_uname not in today_visitors:
+                today_visitors[curr_uname] = {
+                    "username": curr_uname,
+                    "name": user.get("name") or "",
+                    "role": user.get("role") or "OPERATOR",
+                    "login_count": 1,
+                    "activity_count": 1,
+                    "last_login": now_utc.isoformat(),
+                    "last_ip": self.client_ip(),
+                }
+            else:
+                if user.get("role") and today_visitors[curr_uname].get("role") != user.get("role"):
+                    today_visitors[curr_uname]["role"] = user.get("role")
+                if user.get("name") and not today_visitors[curr_uname].get("name"):
+                    today_visitors[curr_uname]["name"] = user.get("name")
+
+        # 장비별 분류(Category) 매핑
+        cat_map_rows = db().execute("SELECT hostname, category FROM vault_items").fetchall()
+        host_to_cat = {r["hostname"]: r["category"] for r in cat_map_rows}
+
         today_list = sorted(today_visitors.values(), key=lambda x: x["last_login"], reverse=True)
         yesterday_list = sorted(yesterday_visitors.values(), key=lambda x: x["last_login"], reverse=True)
         trend_7d = [trend_map[d.isoformat()] for d in day_keys]
         top_devices = [
-            {"hostname": hn, "count": cnt}
+            {"hostname": hn, "category": host_to_cat.get(hn, ""), "count": cnt}
             for hn, cnt in sorted(device_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
         ]
         failed_alerts = sorted(failed_alerts_map.values(), key=lambda x: (-x["count"], x["last_attempt"]))[:8]
@@ -1518,8 +1680,8 @@ class VaultHandler(BaseHTTPRequestHandler):
         recent_sql = "SELECT id, action, username, target_hostname, ip_address, details, created_at FROM audit_logs WHERE 1=1"
         recent_params = []
         if not is_admin:
-            recent_sql += " AND user_id = ?"
-            recent_params.append(user["id"])
+            recent_sql += " AND (user_id = ? OR username = ?)"
+            recent_params.extend([user["id"], user["username"]])
         recent_sql += " ORDER BY id DESC LIMIT 10"
         recent_rows = db().execute(recent_sql, recent_params).fetchall()
         recent_logs = [
@@ -1608,6 +1770,9 @@ class VaultHandler(BaseHTTPRequestHandler):
         ).fetchone()
         if r is None:
             return self.send_json({"ok": False, "error": "Vault item not found"}, 404)
+        create_audit("VAULT_VIEWED", user_id=user["id"], username=user["username"],
+                     target_vault_id=vid, target_hostname=r["hostname"],
+                     ip_address=self.client_ip(), details="장비 상세 조회")
         self.send_json({
             "ok": True,
             "item": {
@@ -1858,7 +2023,11 @@ class VaultHandler(BaseHTTPRequestHandler):
         if not access["can_view"]:
             return self.send_json({"ok": False, "error": "Access denied. No valid approved request or permission."}, 403)
 
-        create_audit("SECRET_VIEWED", user_id=user["id"], username=user["username"],
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        action_type = "SECRET_COPIED" if qs.get("action", ["view"])[0] == "copy" else "SECRET_VIEWED"
+
+        create_audit(action_type, user_id=user["id"], username=user["username"],
                      target_vault_id=vid, target_hostname=item["hostname"],
                      ip_address=self.client_ip(),
                      details=f"source={access['source']}")
@@ -2110,9 +2279,9 @@ class VaultHandler(BaseHTTPRequestHandler):
 
         # 보안 패치: 운영자(OPERATOR)는 본인의 감사 로그만 조회 가능하도록 제한
         if user["role"] != "ADMIN":
-            count_query += " AND user_id = ?"
-            data_query += " AND user_id = ?"
-            params.append(user["id"])
+            count_query += " AND (user_id = ? OR username = ?)"
+            data_query += " AND (user_id = ? OR username = ?)"
+            params.extend([user["id"], user["username"]])
 
         if action_filter:
             count_query += " AND action = ?"
@@ -2167,7 +2336,18 @@ class VaultHandler(BaseHTTPRequestHandler):
 
 def main():
     init_db()
-    server = ThreadingHTTPServer((HOST, PORT), VaultHandler)
+    server_cls = globals().get("ThreadingHTTPServer")
+    if server_cls is None:
+        try:
+            from http.server import ThreadingHTTPServer as server_cls
+        except ImportError:
+            import socketserver
+            from http.server import HTTPServer
+
+            class server_cls(socketserver.ThreadingMixIn, HTTPServer):
+                daemon_threads = True
+
+    server = server_cls((HOST, PORT), VaultHandler)
     print(f"Vault Enterprise Hardened API server running on http://{HOST}:{PORT}")
     try:
         server.serve_forever()

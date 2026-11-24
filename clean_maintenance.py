@@ -27,13 +27,17 @@ def get_conn():
 def list_users():
     conn = get_conn()
     cur = conn.cursor()
-    users = cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id").fetchall()
-    print("\n" + "=" * 65)
-    print(f"{'ID':<6}{'사용자명(Username)':<20}{'역할(Role)':<15}{'생성일시(Created At)':<24}")
-    print("-" * 65)
+    cols = {r["name"] for r in cur.execute("PRAGMA table_info(users)").fetchall()}
+    has_name = "name" in cols
+    query = "SELECT id, username, " + ("name, " if has_name else "'' as name, ") + "role, created_at FROM users ORDER BY id"
+    users = cur.execute(query).fetchall()
+    print("\n" + "=" * 80)
+    print(f"{'Num':<6}{'ID':<18}{'사용자명(Name)':<18}{'역할(Role)':<14}{'생성일시(Created At)':<24}")
+    print("-" * 80)
     for u in users:
-        print(f"{u['id']:<6}{u['username']:<20}{u['role']:<15}{u['created_at']:<24}")
-    print("=" * 65 + "\n")
+        u_name = u['name'] if u['name'] else '-'
+        print(f"{u['id']:<6}{u['username']:<18}{u_name:<18}{u['role']:<14}{u['created_at']:<24}")
+    print("=" * 80 + "\n")
     conn.close()
 
 

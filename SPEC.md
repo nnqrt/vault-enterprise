@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS system_config (
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('ADMIN', 'OPERATOR')),
@@ -147,7 +148,10 @@ Response: `{"ok": true, "user": {...}, "key_verifier": {...}}`
 Admin only. List all users.
 
 ### POST /api/users
-Admin only. Create a new user (minimum 8-char password).
+Admin only. Create a new user (minimum 8-char password, ID, and real Name).
+
+### PUT /api/users/<id>/name
+Admin only. Set user real name once if not already set (strictly immutable once registered).
 
 ### GET /api/vault
 List all vault items.

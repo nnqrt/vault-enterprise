@@ -434,12 +434,18 @@ tr:hover { background: rgba(59,130,246,0.04); }
 .chart-legend-btn.dimmed { opacity: 0.35; }
 .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .svg-line-anim {
-    stroke-dasharray: 1200; stroke-dashoffset: 1200;
-    animation: drawLine 1.1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    stroke-dasharray: none; stroke-dashoffset: 0;
+    animation: drawLine 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
-@keyframes drawLine { to { stroke-dashoffset: 0; } }
-.svg-area-anim { opacity: 0; animation: fadeArea 0.8s ease 0.25s forwards; }
-@keyframes fadeArea { to { opacity: 1; } }
+@keyframes drawLine {
+    from { stroke-dasharray: 1200; stroke-dashoffset: 1200; }
+    to { stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+.svg-area-anim { opacity: 0.85; animation: fadeArea 0.8s ease 0.1s forwards; }
+@keyframes fadeArea {
+    from { opacity: 0; }
+    to { opacity: 0.85; }
+}
 .chart-tooltip {
     position: absolute; pointer-events: none; z-index: 20;
     background: var(--tooltip-bg); border: 1px solid var(--tooltip-border);
@@ -536,8 +542,12 @@ tr:hover { background: rgba(59,130,246,0.04); }
             Python API 서버(<code>python app.py</code>)가 구동되지 않았습니다. 서버 실행 후 새로고침하거나, 아래에서 오프라인 로컬 데모 모드를 이용하세요.
         </div>
         <div class="form-group">
-            <label>관리자 계정명 (ID)</label>
+            <label>관리자 ID (로그인 계정)</label>
             <input type="text" id="init-username" placeholder="예: admin" autocomplete="off" value="admin">
+        </div>
+        <div class="form-group">
+            <label>관리자 사용자명 (이름 - 등록 후 수정 불가)</label>
+            <input type="text" id="init-name" placeholder="예: 최고관리자 또는 실명" autocomplete="off" value="최고관리자">
         </div>
         <div class="form-group">
             <label>관리자 로그인 비밀번호</label>
@@ -637,7 +647,7 @@ tr:hover { background: rgba(59,130,246,0.04); }
         <div id="tab-dashboard">
             <div class="dash-header">
                 <div class="dash-header-title">
-                    <span class="dash-live-dot"></span> 보안 관제 대시보드
+                    <span class="dash-live-dot"></span> <span id="dash-main-title">보안 관제 대시보드</span>
                     <span id="dash-updated-at" class="text-muted" style="font-size:12px;font-weight:400;"></span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
@@ -692,14 +702,14 @@ tr:hover { background: rgba(59,130,246,0.04); }
             <div class="dash-grid-2 dash-row-visitors">
                 <div class="panel dash-fixed-panel">
                     <div class="panel-header">
-                        <div class="panel-title">🟢 오늘 접속한 사용자 <span id="dash-today-date" class="text-muted" style="font-size:12px;font-weight:400;"></span></div>
+                        <div class="panel-title" id="dash-today-title">🟢 오늘 접속한 사용자 <span id="dash-today-date" class="text-muted" style="font-size:12px;font-weight:400;"></span></div>
                         <span id="dash-today-count" class="badge badge-policy">0명</span>
                     </div>
                     <div class="visitor-list" id="dash-today-visitors"></div>
                 </div>
                 <div class="panel dash-fixed-panel">
                     <div class="panel-header">
-                        <div class="panel-title">🕒 어제 접속한 사용자 <span id="dash-yesterday-date" class="text-muted" style="font-size:12px;font-weight:400;"></span></div>
+                        <div class="panel-title" id="dash-yesterday-title">🕒 어제 접속한 사용자 <span id="dash-yesterday-date" class="text-muted" style="font-size:12px;font-weight:400;"></span></div>
                         <span id="dash-yesterday-count" class="badge badge-scope">0명</span>
                     </div>
                     <div class="visitor-list" id="dash-yesterday-visitors"></div>
@@ -710,14 +720,14 @@ tr:hover { background: rgba(59,130,246,0.04); }
             <div class="dash-grid-2 dash-row-insights">
                 <div class="panel dash-fixed-panel">
                     <div class="panel-header">
-                        <div class="panel-title">🔥 자주 열람된 장비 TOP 5 <span class="text-muted" style="font-size:12px;font-weight:400;">(최근 7일)</span></div>
+                        <div class="panel-title" id="dash-top-devices-title">🔥 자주 열람된 장비 TOP 5 <span class="text-muted" style="font-size:12px;font-weight:400;">(최근 7일)</span></div>
                     </div>
                     <div id="dash-top-devices" class="dash-panel-body"></div>
                 </div>
                 <div class="dash-col-stack">
                     <div class="panel dash-fixed-panel">
                         <div class="panel-header">
-                            <div class="panel-title">⏱️ 현재 활성 권한 현황</div>
+                            <div class="panel-title" id="dash-active-grants-title">⏱️ 현재 활성 권한 현황</div>
                             <span id="dash-active-grants-count" class="badge badge-scheduled">0건</span>
                         </div>
                         <div id="dash-active-grants" class="dash-panel-body"></div>
@@ -734,8 +744,8 @@ tr:hover { background: rgba(59,130,246,0.04); }
             <!-- Row 5: Recent Audit Logs -->
             <div class="panel">
                 <div class="panel-header">
-                    <div class="panel-title">📋 최근 감사 로그</div>
-                    <button class="btn btn-secondary btn-sm" onclick="switchTab('audit')">전체 로그 보기 →</button>
+                    <div class="panel-title" id="dash-recent-logs-title">📋 최근 감사 로그</div>
+                    <button class="btn btn-secondary btn-sm" id="dash-recent-logs-btn" onclick="switchTab('audit')">전체 로그 보기 →</button>
                 </div>
                 <div style="overflow-x:auto;">
                     <table>
@@ -806,6 +816,7 @@ tr:hover { background: rgba(59,130,246,0.04); }
 
         <!-- Audit Log Tab -->
         <div id="tab-audit" class="hidden">
+            <div id="audit-role-notice"></div>
             <div class="toolbar">
                 <select id="audit-action-filter" onchange="loadAudit()">
                     <option value="">전체 행위</option>
@@ -855,7 +866,7 @@ tr:hover { background: rgba(59,130,246,0.04); }
                 <div style="overflow-x:auto;">
                     <table>
                         <thead>
-                            <tr><th>ID</th><th>사용자명</th><th>현재 역할</th><th>생성일</th><th>적용 중인 세부 권한</th><th>역할 변경</th><th>계정 관리</th></tr>
+                            <tr><th>Num</th><th>ID</th><th>사용자명</th><th>현재 역할</th><th>생성일</th><th>적용 중인 세부 권한</th><th>역할 변경</th><th>계정 관리</th></tr>
                         </thead>
                         <tbody id="admin-users-body"></tbody>
                     </table>
@@ -1141,8 +1152,13 @@ tr:hover { background: rgba(59,130,246,0.04); }
             <button class="modal-close" onclick="closeModal('modal-user')">&times;</button>
         </div>
         <div class="form-group">
-            <label>사용자명</label>
-            <input type="text" id="user-username" placeholder="사용자명" autocomplete="off">
+            <label>ID (로그인 계정 ID)</label>
+            <input type="text" id="user-username" placeholder="로그인 ID (예: operator1, gildong)" autocomplete="off">
+        </div>
+        <div class="form-group">
+            <label>사용자명 (실명 - 등록 후 수정 불가)</label>
+            <input type="text" id="user-name" placeholder="사용자명/실명 (예: 홍길동)" autocomplete="off">
+            <small style="color:var(--text-muted);font-size:11px;display:block;margin-top:2px;">* 사용자명은 최초 등록 후 정책상 수정할 수 없으므로 정확히 입력하세요.</small>
         </div>
         <div class="form-group">
             <label>초기 비밀번호 (8자 이상)</label>
@@ -1498,7 +1514,11 @@ async function api(method, path, body) {
         adminMasterSecret = null;
         currentUser = null;
         showScreen('login');
-        toast('세션이 만료되었습니다. 다시 로그인하세요.', 'error');
+        if (url === '/auth/login') {
+            toast('아이디 또는 비밀번호가 올바르지 않습니다.', 'error');
+        } else {
+            toast('세션이 만료되었습니다. 다시 로그인하세요.', 'error');
+        }
         throw new Error('Unauthorized');
     }
     if (!data.ok) {
@@ -1551,6 +1571,7 @@ function showScreen(screen) {
 // ===========================
 async function handleInit() {
     const username = document.getElementById('init-username').value.trim();
+    const name = document.getElementById('init-name').value.trim() || username;
     const password = document.getElementById('init-password').value;
     const passwordConfirm = document.getElementById('init-password-confirm').value;
     const master = document.getElementById('init-master').value;
@@ -1584,6 +1605,7 @@ async function handleInit() {
         const wrapped = await wrapMasterSecretForUser(master, password);
         await api('POST', '/auth/init', {
             username,
+            name,
             password,
             verifier_cipher: verifier.encrypted_password,
             verifier_iv: verifier.password_iv,
@@ -1879,10 +1901,14 @@ function enterApp() {
         document.getElementById('tab-requests-btn').classList.remove('hidden');
         document.getElementById('tab-admin-btn').classList.remove('hidden');
         document.getElementById('tab-profile-btn').classList.add('hidden');
+        const auditTabBtn = document.querySelector('button[data-tab="audit"]');
+        if (auditTabBtn) auditTabBtn.textContent = '감사 로그';
     } else {
         document.getElementById('tab-requests-btn').classList.add('hidden');
         document.getElementById('tab-admin-btn').classList.add('hidden');
         document.getElementById('tab-profile-btn').classList.remove('hidden');
+        const auditTabBtn = document.querySelector('button[data-tab="audit"]');
+        if (auditTabBtn) auditTabBtn.textContent = '내 접속·활동 로그';
     }
 
     // 대시보드 탭을 먼저 설정한 후 화면을 띄워 이전 관리자 화면 잔상 방지
@@ -1935,6 +1961,7 @@ async function loadDashboard() {
         if (updEl) updEl.textContent = '기준: ' + formatDate(new Date().toISOString());
 
         // 1. KPI Stat Cards
+        const isAdm = currentUser && currentUser.role === 'ADMIN';
         const todayCnt = (v.today || []).length;
         const yestCnt = (v.yesterday || []).length;
         const diff = todayCnt - yestCnt;
@@ -1952,13 +1979,26 @@ async function loadDashboard() {
             '<div class="stat-card-sub">보안 건강도 <b>' + (s.health_score ?? 100) + '점</b> (' + escHtml(s.health_grade || '최상') + ')</div>' +
             '</div>';
 
-        statsHtml += '<div class="stat-card">' +
-            '<div class="stat-card-accent" style="background:linear-gradient(90deg,#10b981,#34d399);"></div>' +
-            '<div class="stat-card-icon">👥</div>' +
-            '<div class="stat-card-label">오늘 접속자</div>' +
-            '<div class="stat-card-value" style="color:var(--success);">' + todayCnt + '<span style="font-size:15px;font-weight:500;color:var(--text-secondary);">명</span></div>' +
-            '<div class="stat-card-sub">' + deltaHtml + '</div>' +
-            '</div>';
+        if (isAdm) {
+            statsHtml += '<div class="stat-card">' +
+                '<div class="stat-card-accent" style="background:linear-gradient(90deg,#10b981,#34d399);"></div>' +
+                '<div class="stat-card-icon">👥</div>' +
+                '<div class="stat-card-label">오늘 시스템 접속자</div>' +
+                '<div class="stat-card-value" style="color:var(--success);">' + todayCnt + '<span style="font-size:15px;font-weight:500;color:var(--text-secondary);">명</span></div>' +
+                '<div class="stat-card-sub">' + deltaHtml + '</div>' +
+                '</div>';
+        } else {
+            const myInfo = (v.today || []).find(u => u.username === currentUser.username) || (v.today && v.today[0]) || { login_count: 1, activity_count: 1 };
+            const myLogins = myInfo.login_count || 1;
+            const myActs = myInfo.activity_count || 1;
+            statsHtml += '<div class="stat-card">' +
+                '<div class="stat-card-accent" style="background:linear-gradient(90deg,#10b981,#34d399);"></div>' +
+                '<div class="stat-card-icon">👤</div>' +
+                '<div class="stat-card-label">나의 오늘 웹 접속</div>' +
+                '<div class="stat-card-value" style="color:var(--success);">' + myLogins + '<span style="font-size:15px;font-weight:500;color:var(--text-secondary);">회 접속</span></div>' +
+                '<div class="stat-card-sub">오늘 총 ' + myActs + '건 업무 활동 수행</div>' +
+                '</div>';
+        }
 
         statsHtml += '<div class="stat-card">' +
             '<div class="stat-card-accent" style="background:linear-gradient(90deg,' + ((s.warnings || 0) > 0 ? '#f59e0b,#ef4444' : '#10b981,#06b6d4') + ');"></div>' +
@@ -1968,7 +2008,7 @@ async function loadDashboard() {
             '<div class="stat-card-sub">중복 ' + (s.duplicate_count || 0) + ' · 노후(90일+) ' + (s.old_count || 0) + '</div>' +
             '</div>';
 
-        if (currentUser.role === 'ADMIN') {
+        if (isAdm) {
             const pending = s.pending_requests || 0;
             updatePendingBadge(pending);
             statsHtml += '<div class="stat-card" style="cursor:pointer;" onclick="switchTab(\'requests\')">' +
@@ -1988,20 +2028,38 @@ async function loadDashboard() {
         dashCategoryData = data.categories || [];
         renderCategoryDonut();
 
-        // 3. Today vs Yesterday Visitors
-        document.getElementById('dash-today-date').textContent = v.today_date ? '(' + v.today_date + ')' : '';
-        document.getElementById('dash-yesterday-date').textContent = v.yesterday_date ? '(' + v.yesterday_date + ')' : '';
-        document.getElementById('dash-today-count').textContent = todayCnt + '명';
-        document.getElementById('dash-yesterday-count').textContent = yestCnt + '명';
-        renderVisitorList('dash-today-visitors', v.today || [], 'today', '오늘 아직 접속 기록이 없습니다.');
-        renderVisitorList('dash-yesterday-visitors', v.yesterday || [], 'yesterday', '어제 접속 기록이 없습니다.');
+        // 3. Dynamic Titles & Today vs Yesterday Visitors
+        const dashMainTitle = document.getElementById('dash-main-title');
+        if (dashMainTitle) {
+            dashMainTitle.textContent = isAdm ? '보안 관제 대시보드 (전체)' : '보안 관제 대시보드 (내 업무 현황)';
+        }
+        const todayTitleEl = document.getElementById('dash-today-title');
+        const yestTitleEl = document.getElementById('dash-yesterday-title');
+        if (todayTitleEl) {
+            todayTitleEl.innerHTML = (isAdm ? '🟢 오늘 시스템 접속자 ' : '🟢 나의 오늘 접속 및 활동 현황 ') + '<span id="dash-today-date" class="text-muted" style="font-size:12px;font-weight:400;">' + (v.today_date ? '(' + v.today_date + ')' : '') + '</span>';
+        }
+        if (yestTitleEl) {
+            yestTitleEl.innerHTML = (isAdm ? '🕒 어제 시스템 접속자 ' : '🕒 나의 어제 접속 및 활동 현황 ') + '<span id="dash-yesterday-date" class="text-muted" style="font-size:12px;font-weight:400;">' + (v.yesterday_date ? '(' + v.yesterday_date + ')' : '') + '</span>';
+        }
+        document.getElementById('dash-today-count').textContent = isAdm ? (todayCnt + '명') : (todayCnt > 0 ? '정상 접속 중' : '접속 기록 없음');
+        document.getElementById('dash-yesterday-count').textContent = isAdm ? (yestCnt + '명') : (yestCnt > 0 ? '어제 접속 있음' : '어제 접속 없음');
+        renderVisitorList('dash-today-visitors', v.today || [], 'today', isAdm ? '오늘 아직 접속 기록이 없습니다.' : '오늘 본인 계정의 접속 기록이 없습니다.');
+        renderVisitorList('dash-yesterday-visitors', v.yesterday || [], 'yesterday', isAdm ? '어제 접속 기록이 없습니다.' : '어제 본인 계정의 접속 기록이 없습니다.');
 
         // 4. Top 5 Devices, Active Grants, Failed Alerts
+        const topDevTitleEl = document.getElementById('dash-top-devices-title');
+        if (topDevTitleEl) {
+            topDevTitleEl.innerHTML = (isAdm ? '🔥 자주 열람된 장비 TOP 5 (전체) ' : '🔥 내가 자주 열람한 장비 TOP 5 ') + '<span class="text-muted" style="font-size:12px;font-weight:400;">(최근 7일)</span>';
+        }
+        const activeGrantsTitleEl = document.getElementById('dash-active-grants-title');
+        if (activeGrantsTitleEl) {
+            activeGrantsTitleEl.textContent = isAdm ? '⏱️ 현재 활성 권한 현황 (전체)' : '⏱️ 나의 현재 활성 권한 현황';
+        }
         renderTopDevices(data.top_devices || []);
         renderActiveGrants(data.active_grants || []);
 
         const alertPanel = document.getElementById('dash-alerts-panel');
-        if (currentUser.role === 'ADMIN') {
+        if (isAdm) {
             if (alertPanel) alertPanel.classList.remove('hidden');
             renderFailedAlerts(data.failed_alerts || []);
         } else {
@@ -2009,10 +2067,19 @@ async function loadDashboard() {
         }
 
         // 5. Recent Audit Logs
+        const recentLogsTitleEl = document.getElementById('dash-recent-logs-title');
+        const recentLogsBtnEl = document.getElementById('dash-recent-logs-btn');
+        if (recentLogsTitleEl) {
+            recentLogsTitleEl.textContent = isAdm ? '📋 최근 시스템 전체 감사 로그' : '📋 나의 최근 웹 및 장비 접속 로그';
+        }
+        if (recentLogsBtnEl) {
+            recentLogsBtnEl.textContent = isAdm ? '전체 감사 로그 보기 →' : '내 전체 접속 이력 보기 →';
+        }
+
         const logs = data.recent_logs || [];
         let tbody = '';
         if (logs.length === 0) {
-            tbody = '<tr><td colspan="6" class="text-center text-muted">감사 로그가 없습니다.</td></tr>';
+            tbody = '<tr><td colspan="6" class="text-center text-muted">' + (isAdm ? '감사 로그가 없습니다.' : '최근 접속 및 장비 열람 로그가 없습니다.') + '</td></tr>';
         } else {
             logs.forEach(log => {
                 tbody += '<tr><td>' + escHtml(formatDate(log.created_at)) + '</td><td>' + escHtml(log.action) + '</td><td>' + escHtml(log.username || '-') + '</td><td>' + escHtml(log.target_hostname || '-') + '</td><td>' + escHtml(log.ip_address || '-') + '</td><td>' + escHtml(log.details || '-') + '</td></tr>';
@@ -2110,16 +2177,41 @@ function renderTrendChart() {
     // Hover vertical guide line
     svg += '<line id="trend-hover-line" x1="0" y1="' + padT + '" x2="0" y2="' + (padT + plotH) + '" stroke="var(--text-muted)" stroke-width="1" stroke-dasharray="3 3" style="opacity:0;transition:opacity 0.12s;"/>';
 
-    // Areas + Lines + Points
+    // 1. Areas in background (only for series with positive values)
     seriesMeta.forEach(sm => {
         if (!dashTrendVisible[sm.key]) return;
+        const allZero = data.every(d => (d[sm.key] || 0) === 0);
+        if (allZero) return;
         const pts = data.map((d, idx) => [toX(idx), toY(d[sm.key] || 0)]);
         const linePath = buildSmoothPath(pts);
         const areaPath = linePath + ' L' + pts[pts.length - 1][0].toFixed(1) + ',' + (padT + plotH) + ' L' + pts[0][0].toFixed(1) + ',' + (padT + plotH) + ' Z';
         svg += '<path class="svg-area-anim" d="' + areaPath + '" fill="url(#' + sm.gradId + ')"/>';
-        svg += '<path class="svg-line-anim" d="' + linePath + '" fill="none" stroke="' + sm.color + '" stroke-width="2.5" stroke-linecap="round"/>';
-        pts.forEach((pt, idx) => {
-            svg += '<circle cx="' + pt[0].toFixed(1) + '" cy="' + pt[1].toFixed(1) + '" r="3.5" fill="var(--chart-pt-bg)" stroke="' + sm.color + '" stroke-width="2" class="trend-pt-' + idx + '"/>';
+    });
+
+    // 2. Lines (failures in background, secrets next, logins on top; avoid thick red line on all-zero failure)
+    const lineOrder = ['failures', 'secrets', 'logins'];
+    lineOrder.forEach(key => {
+        const sm = seriesMeta.find(s => s.key === key);
+        if (!sm || !dashTrendVisible[sm.key]) return;
+        const allZero = data.every(d => (d[sm.key] || 0) === 0);
+        if (allZero && key === 'failures') return; // Don't draw solid red error line across zero-axis
+        const pts = data.map((d, idx) => [toX(idx), toY(d[sm.key] || 0)]);
+        const linePath = buildSmoothPath(pts);
+        const strokeColor = allZero ? 'var(--chart-grid)' : sm.color;
+        const strokeW = allZero ? '1' : '2.5';
+        svg += '<path class="svg-line-anim" d="' + linePath + '" fill="none" stroke="' + strokeColor + '" stroke-width="' + strokeW + '" stroke-linecap="round"/>';
+    });
+
+    // 3. Data points (draw colored dots only for days with actual activity > 0)
+    lineOrder.forEach(key => {
+        const sm = seriesMeta.find(s => s.key === key);
+        if (!sm || !dashTrendVisible[sm.key]) return;
+        data.forEach((d, idx) => {
+            const val = d[sm.key] || 0;
+            if (val > 0) {
+                const pt = [toX(idx), toY(val)];
+                svg += '<circle cx="' + pt[0].toFixed(1) + '" cy="' + pt[1].toFixed(1) + '" r="3.5" fill="var(--chart-pt-bg)" stroke="' + sm.color + '" stroke-width="2" class="trend-pt-' + idx + '"/>';
+            }
         });
     });
 
@@ -2195,7 +2287,7 @@ function renderHealthGauge(s) {
             '<svg width="108" height="108" viewBox="0 0 108 108">' +
                 '<circle cx="54" cy="54" r="' + r + '" fill="none" stroke="var(--chart-track)" stroke-width="10"/>' +
                 '<circle id="health-ring-circle" class="health-ring-anim" cx="54" cy="54" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="10" stroke-linecap="round" ' +
-                    'stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + circ.toFixed(1) + '" transform="rotate(-90 54 54)"/>' +
+                    'stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + targetOffset.toFixed(1) + '" transform="rotate(-90 54 54)"/>' +
                 '<text x="54" y="53" text-anchor="middle" fill="var(--text-primary)" font-size="24" font-weight="700">' + score + '</text>' +
                 '<text x="54" y="69" text-anchor="middle" fill="var(--text-secondary)" font-size="11">/ 100점</text>' +
             '</svg>' +
@@ -2278,18 +2370,21 @@ function renderVisitorList(containerId, list, cls, emptyMsg) {
         return;
     }
     el.innerHTML = list.map(u => {
-        const initial = (u.username || '?').slice(0, 2).toUpperCase();
+        const displayName = u.name ? escHtml(u.name) + ' (' + escHtml(u.username) + ')' : escHtml(u.username);
+        const initial = (u.name || u.username || '?').slice(0, 2).toUpperCase();
         const roleBadge = u.role === 'ADMIN'
             ? '<span class="badge badge-admin">ADMIN</span>'
             : '<span class="badge badge-operator">OPERATOR</span>';
         const timeStr = formatDate(u.last_login).split(' ')[1] || formatDate(u.last_login);
+        const loginCnt = u.login_count || 1;
+        const actCnt = u.activity_count || loginCnt;
         return '<div class="visitor-item">' +
             '<div class="visitor-avatar ' + cls + '">' + escHtml(initial) + '</div>' +
             '<div class="visitor-info">' +
-                '<div class="visitor-name">' + escHtml(u.username) + ' ' + roleBadge + '</div>' +
-                '<div class="visitor-meta">마지막 접속: ' + escHtml(timeStr) + ' · IP: ' + escHtml(u.last_ip || '-') + '</div>' +
+                '<div class="visitor-name">' + displayName + ' ' + roleBadge + '</div>' +
+                '<div class="visitor-meta">최근 활동: ' + escHtml(timeStr) + ' · IP: ' + escHtml(u.last_ip || '-') + ' · 총 ' + actCnt + '건 활동</div>' +
             '</div>' +
-            '<div class="visitor-count-pill">' + u.login_count + '회</div>' +
+            '<div class="visitor-count-pill" title="실제 로그인 횟수">' + loginCnt + '회 접속</div>' +
             '</div>';
     }).join('');
 }
@@ -2304,8 +2399,9 @@ function renderTopDevices(list) {
     const maxCnt = Math.max(1, list[0].count || 1);
     el.innerHTML = '<div class="top-bar-list">' + list.map((item, idx) => {
         const pct = Math.round((item.count / maxCnt) * 100);
+        const catBadge = item.category ? ' <span class="badge badge-scope" style="font-size:10px;padding:1px 6px;margin-left:4px;">' + escHtml(item.category) + '</span>' : '';
         return '<div class="top-bar-row">' +
-            '<div class="top-bar-head"><span><strong style="color:var(--primary);margin-right:6px;">#' + (idx + 1) + '</strong>' + escHtml(item.hostname) + '</span><span><b>' + item.count + '회</b></span></div>' +
+            '<div class="top-bar-head"><span><strong style="color:var(--primary);margin-right:6px;">#' + (idx + 1) + '</strong>' + escHtml(item.hostname) + catBadge + '</span><span><b>' + item.count + '회 열람</b></span></div>' +
             '<div class="top-bar-track"><div class="top-bar-fill" data-pct="' + pct + '"></div></div>' +
             '</div>';
     }).join('') + '</div>';
@@ -2554,7 +2650,7 @@ function renderVault() {
 async function viewSecret(itemId, hostname) {
     if (!vaultKey) { toast('마스터 키가 없습니다. 잠금을 해제하세요.', 'error'); return; }
     try {
-        const data = await api('GET', '/vault/' + itemId + '/secret');
+        const data = await api('GET', '/vault/' + itemId + '/secret?action=view');
         const plaintext = await decryptPassword(data.encrypted_password, data.password_iv, vaultKey);
         let msg = '비밀번호: ' + plaintext;
         if (data.expires_at) {
@@ -2569,20 +2665,10 @@ async function viewSecret(itemId, hostname) {
 async function copySecret(itemId, hostname) {
     if (!vaultKey) { toast('마스터 키가 없습니다. 잠금을 해제하세요.', 'error'); return; }
     try {
-        const data = await api('GET', '/vault/' + itemId + '/secret');
+        const data = await api('GET', '/vault/' + itemId + '/secret?action=copy');
         const plaintext = await decryptPassword(data.encrypted_password, data.password_iv, vaultKey);
         await navigator.clipboard.writeText(plaintext);
         toast('클립보드에 복사되었습니다. 30초 후 자동 삭제됩니다.', 'info');
-
-        // Log SECRET_COPIED
-        try {
-            await api('POST', '/audit/log', {
-                action: 'SECRET_COPIED',
-                target_vault_id: itemId,
-                target_hostname: hostname,
-                details: '클립보드 복사'
-            });
-        } catch (e) { /* ignore */ }
 
         // Auto-clear clipboard after 30s
         if (clipboardTimer) clearTimeout(clipboardTimer);
@@ -3207,6 +3293,14 @@ async function loadDashboardPendingCount() {
 // ===========================
 async function loadAudit() {
     try {
+        const noticeEl = document.getElementById('audit-role-notice');
+        if (noticeEl) {
+            if (currentUser && currentUser.role === 'ADMIN') {
+                noticeEl.innerHTML = '<div style="margin-bottom:12px;padding:10px 14px;background:rgba(59,130,246,0.08);border-left:4px solid #3b82f6;border-radius:4px;font-size:13px;display:flex;align-items:center;gap:8px;"><span>🛡️</span><span><strong>관리자 보안 감사 모드</strong>: 시스템 내 모든 사용자의 웹 접속(로그인/로그아웃) 및 장비 패스워드 열람/복사/수정 내역을 모니터링합니다.</span></div>';
+            } else {
+                noticeEl.innerHTML = '<div style="margin-bottom:12px;padding:10px 14px;background:rgba(16,185,129,0.08);border-left:4px solid #10b981;border-radius:4px;font-size:13px;display:flex;align-items:center;gap:8px;"><span>👤</span><span><strong>운용자 내 활동 로그</strong>: 보안 규정에 따라 본인 계정의 웹 접속(로그인/로그아웃) 및 본인이 열람·작업한 장비 접속 로그만 안전하게 표시됩니다. (타 사용자 로그 열람 불가)</span></div>';
+            }
+        }
         const action = document.getElementById('audit-action-filter').value;
         let query = '/audit?page=' + auditPage + '&limit=' + AUDIT_LIMIT;
         if (action) query += '&action=' + encodeURIComponent(action);
@@ -3262,6 +3356,8 @@ function togglePasswordVisibility(btn, inputIds) {
 
 function openAddUserModal() {
     document.getElementById('user-username').value = '';
+    const nameEl = document.getElementById('user-name');
+    if (nameEl) nameEl.value = '';
     const pwEl = document.getElementById('user-password');
     pwEl.value = '';
     pwEl.type = 'password';
@@ -3298,10 +3394,16 @@ function copyInputValue(inputId) {
 
 async function createUser() {
     const username = document.getElementById('user-username').value.trim();
+    const nameEl = document.getElementById('user-name');
+    const name = nameEl ? nameEl.value.trim() : '';
     const password = document.getElementById('user-password').value;
     const role = document.getElementById('user-role').value;
     if (!username || !password) {
-        toast('모든 필드를 입력해주세요.', 'error');
+        toast('ID와 비밀번호를 모두 입력해주세요.', 'error');
+        return;
+    }
+    if (!name) {
+        toast('사용자명(실명)을 입력해주세요.', 'error');
         return;
     }
     if (password.length < 8) {
@@ -3316,13 +3418,14 @@ async function createUser() {
         const wrapped = await wrapMasterSecretForUser(adminMasterSecret, password);
         await api('POST', '/users', {
             username,
+            name,
             password,
             role,
             wrapped_vault_key: wrapped.wrapped_vault_key,
             wrapped_vault_key_iv: wrapped.wrapped_vault_key_iv,
             key_salt: wrapped.key_salt
         });
-        toast('사용자가 생성되었습니다. 별도 마스터 키 없이 아이디/비밀번호로 바로 로그인 가능합니다.', 'success');
+        toast('사용자가 생성되었습니다. (ID: ' + username + ', 사용자명: ' + name + ')', 'success');
         closeModal('modal-user');
         loadAdminMenu();
     } catch (e) {
@@ -3413,7 +3516,7 @@ function renderAdminUsers() {
     const tbody = document.getElementById('admin-users-body');
     if (!tbody) return;
     if (cachedAdminUsers.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">등록된 사용자가 없습니다.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">등록된 사용자가 없습니다.</td></tr>';
         return;
     }
     let html = '';
@@ -3443,9 +3546,20 @@ function renderAdminUsers() {
             manageBtns = '<button class="btn btn-success btn-sm" onclick="openPermissionModal(null,' + u.id + ')">🛡️ 권한 부여</button> ' + manageBtns;
         }
 
+        let nameCell = '';
+        if (u.name) {
+            nameCell = '<strong style="color:var(--text-primary);">' + escHtml(u.name) + '</strong>';
+        } else {
+            nameCell = '<div style="display:flex;gap:4px;align-items:center;">' +
+                '<input type="text" id="name-input-' + u.id + '" placeholder="사용자명 입력" class="form-input-sm" style="width:110px;padding:3px 6px;font-size:12px;">' +
+                '<button class="btn btn-primary btn-sm" style="padding:3px 8px;font-size:11px;" onclick="saveUserName(' + u.id + ')">저장</button>' +
+                '</div>';
+        }
+
         html += '<tr>';
         html += '<td>' + u.id + '</td>';
         html += '<td><strong>' + escHtml(u.username) + '</strong>' + (isSelf ? ' <span class="text-muted" style="font-size:11px;">(나)</span>' : '') + '</td>';
+        html += '<td>' + nameCell + '</td>';
         html += '<td>' + roleBadge + '</td>';
         html += '<td style="font-size:12px;white-space:nowrap;">' + escHtml(formatDate(u.created_at)) + '</td>';
         html += '<td>' + permText + '</td>';
@@ -3454,6 +3568,26 @@ function renderAdminUsers() {
         html += '</tr>';
     });
     tbody.innerHTML = html;
+}
+
+async function saveUserName(userId) {
+    const input = document.getElementById('name-input-' + userId);
+    if (!input) return;
+    const name = input.value.trim();
+    if (!name) {
+        toast('사용자명(이름)을 입력해주세요.', 'warning');
+        return;
+    }
+    if (!confirm('사용자명을 "' + name + '"(으)로 등록하시겠습니까?\n등록 후에는 정책상 다시 수정할 수 없습니다.')) {
+        return;
+    }
+    try {
+        await api('PUT', '/users/' + userId + '/name', { name });
+        toast('사용자명이 등록되었습니다. (수정 불가 고정 완료)', 'success');
+        loadAdminMenu();
+    } catch (e) {
+        toast('사용자명 등록 실패: ' + e.message, 'error');
+    }
 }
 
 async function changeUserRole(userId, username) {

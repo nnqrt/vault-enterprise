@@ -22,6 +22,7 @@ def init_db(conn):
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL DEFAULT '',
             password_hash TEXT NOT NULL,
             password_salt TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('ADMIN', 'OPERATOR')),
@@ -98,14 +99,21 @@ def hash_password(password: str, salt_hex: str) -> str:
 def main():
     username = sys.argv[1] if len(sys.argv) > 1 else "admin"
     password = sys.argv[2] if len(sys.argv) > 2 else "Admin1234!"
+    name = sys.argv[3] if len(sys.argv) > 3 else "관리자"
 
     os.makedirs(DB_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     init_db(conn)
 
+    # name 컬럼 마이그레이션
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "name" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+
     cur = conn.cursor()
-    existing = cur.execute("SELECT id, role FROM users WHERE username = ?", (username,)).fetchone()
+    existing = cur.execute("SELECT id, role, name FROM users WHERE username = ?", (username,)).fetchone()
     ts = datetime.utcnow().isoformat()
 
     salt = secrets.token_bytes(32).hex()
@@ -113,23 +121,27 @@ def main():
 
     if existing:
         cur.execute(
-            "UPDATE users SET password_hash = ?, password_salt = ?, role = 'ADMIN' WHERE id = ?",
-            (pw_hash, salt, existing["id"])
+            "UPDATE users SET password_hash = ?, password_salt = ?, role = 'ADMIN', name = CASE WHEN name = '' THEN ? ELSE name END WHERE id = ?",
+            (pw_hash, salt, name, existing["id"])
+        )
+        cur.execute(
+            "INSERT INTO audit_logs (action, user_id, username, ip_address, details, created_at) VALUES (?,?,?,?,?,?)",
+            ("USER_PASSWORD_RESET", existing["id"], username, "127.0.0.1 (CLI)", f"Password reset & ADMIN role renewed via create_admin.py", ts)
         )
         conn.commit()
         print(f"[OK] 기존 계정 '{username}'의 비밀번호를 업데이트하고 ADMIN 권한을 재부여했습니다.")
     else:
         cur.execute(
-            "INSERT INTO users (username, password_hash, password_salt, role, created_at) VALUES (?,?,?,?,?)",
-            (username, pw_hash, salt, "ADMIN", ts)
+            "INSERT INTO users (username, name, password_hash, password_salt, role, created_at) VALUES (?,?,?,?,?,?)",
+            (username, name, pw_hash, salt, "ADMIN", ts)
         )
         user_id = cur.lastrowid
         cur.execute(
             "INSERT INTO audit_logs (action, user_id, username, ip_address, details, created_at) VALUES (?,?,?,?,?,?)",
-            ("LOG_INIT_ADMIN", user_id, username, "127.0.0.1 (CLI)", "Created via create_admin.py", ts)
+            ("LOG_INIT_ADMIN", user_id, username, "127.0.0.1 (CLI)", f"Created via create_admin.py (Name: {name})", ts)
         )
         conn.commit()
-        print(f"[OK] 신규 관리자 계정 '{username}'이 성공적으로 생성되었습니다.")
+        print(f"[OK] 신규 관리자 계정 '{username}'(사용자명: {name})이 성공적으로 생성되었습니다.")
 
     conn.close()
     print("-" * 50)
